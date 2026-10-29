@@ -82,18 +82,19 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 `);
 
-// Migration for existing DBs (just in case)
 try { db.exec(`ALTER TABLE users ADD COLUMN email TEXT`); } catch(e) {}
 try { db.exec(`ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 1`); } catch(e) {}
 
-// --- Email Transporter -----------------------------------------------------
+// --- Email Transporter (Fire and Forget) -----------------------------------
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.ethereal.email',
   port: process.env.SMTP_PORT || 587,
   auth: {
     user: process.env.SMTP_USER || 'placeholder',
     pass: process.env.SMTP_PASS || 'placeholder'
-  }
+  },
+  connectionTimeout: 3000, // 3 seconds max
+  socketTimeout: 3000
 });
 
 // --- Prepared Statements ---------------------------------------------------
@@ -186,20 +187,23 @@ app.post('/api/auth/send-otp', async (req, res) => {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
   S.insertOtp.run(email, code, Math.floor(Date.now() / 1000) + 600); // 10 mins expiry
 
-  try {
-    await transporter.sendMail({
-      from: '"Presence Chat" <no-reply@presencechat.com>',
-      to: email,
-      subject: 'كود تفعيل حسابك',
-      text: `كود التفعيل الخاص بك هو: ${code}`
-    });
-    console.log(`[OTP] Sent to ${email}: ${code}`);
-    res.json({ ok: true, message: 'تم إرسال الكود' });
-  } catch (e) {
-    // Print to logs if email fails
-    console.log(`[OTP - NO EMAIL] ${email}: ${code}`);
-    res.json({ ok: true, message: 'تم الإرسال (تحقق من السيرفر)' });
-  }
+  // 1. Print to Render Logs IMMEDIATELY
+  console.log('\n=============================================');
+  console.log(`[OTP CODE] for ${email} : ${code}`);
+  console.log('=============================================\n');
+
+  // 2. Respond to the user IMMEDIATELY so the UI doesn't hang
+  res.json({ ok: true, message: 'تم إرسال الكود (تحقق من اللوجات)' });
+
+  // 3. Try to send email in the background (don't wait for it)
+  transporter.sendMail({
+    from: '"Presence Chat" <no-reply@presencechat.com>',
+    to: email,
+    subject: 'كود تفعيل حسابك',
+    text: `كود التفعيل الخاص بك هو: ${code}`
+  }).catch((err) => {
+    console.log(`[EMAIL FAILED] Could not send to ${email}, but OTP is logged above.`);
+  });
 });
 
 app.post('/api/auth/verify-otp', async (req, res) => {
