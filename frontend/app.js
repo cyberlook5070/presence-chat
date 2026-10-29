@@ -4,12 +4,9 @@ const state = {
   token: localStorage.getItem('pc.token') || null,
   user: null,
   socket: null,
-  view: 'main',           // 'main' | 'add' | 'chat'
-  chat: null,             // { type:'user'|'channel', id, name }
-  friends: [],
-  channels: [],
-  presence: Object.create(null),
-  requests: [],
+  view: 'main',           // 'main' | 'add' | 'requests' | 'settings' | 'admin' | 'chat'
+  chat: null,
+  friends: [], channels: [], presence: Object.create(null), requests: [], reports: [], users: [],
   authMode: 'login',
 };
 
@@ -30,14 +27,10 @@ function el(tag, attrs, ...children) {
   return n;
 }
 
-/* ---------- API ---------- */
 async function api(method, path, body) {
   const res = await fetch('/api' + path, {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(state.token ? { Authorization: 'Bearer ' + state.token } : {}),
-    },
+    headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: 'Bearer ' + state.token } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({ error: 'parse_error' }));
@@ -45,7 +38,6 @@ async function api(method, path, body) {
   return data;
 }
 
-/* ---------- Boot ---------- */
 (async function boot() {
   if (state.token) {
     try {
@@ -55,14 +47,12 @@ async function api(method, path, body) {
       render();
       return;
     } catch {
-      state.token = null;
-      localStorage.removeItem('pc.token');
+      state.token = null; localStorage.removeItem('pc.token');
     }
   }
   renderAuth();
 })();
 
-/* ---------- Socket ---------- */
 function connectSocket() {
   return new Promise((resolve) => {
     state.socket = io({ auth: { token: state.token }, transports: ['websocket', 'polling'] });
@@ -71,67 +61,43 @@ function connectSocket() {
 
     state.socket.on('presence:update', ({ userId, online }) => {
       state.presence[userId] = online;
-      if (state.view === 'main') renderMainList(currentFilter.main);
+      if (state.view === 'main') renderMainList();
     });
-    state.socket.on('friend:request', async () => {
-      await loadRequests();
-      if (state.view === 'main') renderMainList(currentFilter.main);
+    state.socket.on('friend:request', async () => { await loadRequests(); render(); });
+    state.socket.on('friend:response', async () => { await loadFriends(); render(); });
+    state.socket.on('message:dm', ({ message }) => {
+      if (state.view === 'chat') appendMessage(message);
     });
-    state.socket.on('friend:response', async ({ accepted }) => {
-      if (accepted) await loadFriends();
-      if (state.view === 'main') renderMainList(currentFilter.main);
+    state.socket.on('message:channel', ({ message }) => {
+      if (state.view === 'chat') appendMessage(message);
     });
-    state.socket.on('message:dm', ({ peerId, message }) => {
-      if (state.view === 'chat' && state.chat?.type === 'user' && state.chat.id === peerId) {
-        appendMessage(message);
-      }
-    });
-    state.socket.on('message:channel', ({ channelId, message }) => {
-      if (state.view === 'chat' && state.chat?.type === 'channel' && state.chat.id === channelId) {
-        appendMessage(message);
-      }
+    state.socket.on('user:updated', ({ userId, displayName, username }) => {
+      const f = state.friends.find(x => x.id === userId);
+      if (f) { f.displayName = displayName; f.username = username; }
+      render();
     });
   });
 }
 
-/* ---------- Loaders ---------- */
-async function loadFriends() {
-  const r = await api('GET', '/friends');
-  state.friends = r.friends;
-  for (const f of r.friends) if (f.online) state.presence[f.id] = true;
-}
-async function loadChannels() {
-  const r = await api('GET', '/channels');
-  state.channels = r.channels;
-}
-async function loadRequests() {
-  const r = await api('GET', '/friends/requests');
-  state.requests = r.requests;
-}
+async function loadFriends() { state.friends = (await api('GET', '/friends')).friends; }
+async function loadChannels() { state.channels = (await api('GET', '/channels')).channels; }
+async function loadRequests() { state.requests = (await api('GET', '/friends/requests')).requests; }
 
-/* ---------- Auth UI ---------- */
 function renderAuth() {
-  const app = $('#app');
-  app.innerHTML = '';
+  const app = $('#app'); app.innerHTML = '';
   const card = el('div', { class: 'auth-card' },
     el('h1', null, 'Presence Chat'),
     el('div', { class: 'tabs' },
-      el('button', { class: 'tab active', 'data-tab': 'login', onclick: onTab }, 'دخول'),
-      el('button', { class: 'tab', 'data-tab': 'register', onclick: onTab }, 'تسجيل')
+      el('button', { class: 'tab active', onclick: onTab, 'data-tab': 'login' }, 'دخول'),
+      el('button', { class: 'tab', onclick: onTab, 'data-tab': 'register' }, 'تسجيل')
     ),
     el('form', { class: 'auth-form', onsubmit: onAuthSubmit },
       el('div', { class: 'field', id: 'f-name', style: 'display:none' },
         el('label', null, 'الاسم الظاهر'),
-        el('input', { name: 'displayName', type: 'text', autocomplete: 'name' })
+        el('input', { name: 'displayName', type: 'text' })
       ),
-      el('div', { class: 'field' },
-        el('label', null, 'اسم المستخدم'),
-        el('input', { name: 'username', type: 'text', autocomplete: 'username', required: true })
-      ),
-      el('div', { class: 'field' },
-        el('label', null, 'كلمة المرور'),
-        el('input', { name: 'password', type: 'password', autocomplete: 'current-password', required: true })
-      ),
+      el('div', { class: 'field' }, el('label', null, 'اسم المستخدم'), el('input', { name: 'username', type: 'text', required: true })),
+      el('div', { class: 'field' }, el('label', null, 'كلمة المرور'), el('input', { name: 'password', type: 'password', required: true })),
       el('button', { type: 'submit', class: 'btn primary', style: 'width:100%' }, 'دخول')
     ),
     el('div', { class: 'err', id: 'auth-err' })
@@ -143,8 +109,7 @@ function onTab(e) {
   state.authMode = e.target.dataset.tab;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === state.authMode));
   $('#f-name').style.display = state.authMode === 'register' ? 'block' : 'none';
-  document.querySelector('.auth-form button[type="submit"]').textContent =
-    state.authMode === 'register' ? 'تسجيل' : 'دخول';
+  document.querySelector('.auth-form button[type="submit"]').textContent = state.authMode === 'register' ? 'تسجيل' : 'دخول';
 }
 
 async function onAuthSubmit(e) {
@@ -154,290 +119,216 @@ async function onAuthSubmit(e) {
   try {
     const path = state.authMode === 'login' ? '/login' : '/register';
     const r = await api('POST', path, body);
-    state.token = r.token;
-    localStorage.setItem('pc.token', r.token);
-    state.user = r.user;
+    state.token = r.token; localStorage.setItem('pc.token', r.token); state.user = r.user;
     await connectSocket();
     await Promise.all([loadFriends(), loadChannels(), loadRequests()]);
     render();
-  } catch (err) {
-    $('#auth-err').textContent = err.message;
-  }
+  } catch (err) { $('#auth-err').textContent = err.message; }
 }
 
-/* ---------- Shell ---------- */
 function render() {
-  const app = $('#app');
-  app.innerHTML = '';
+  const app = $('#app'); app.innerHTML = '';
   const shell = el('div', { class: 'shell' },
     el('header', { class: 'header' },
       el('div', { class: 'brand' }, 'Presence Chat'),
-      el('div', { class: 'me' },
-        el('span', { class: 'dot' }),
-        el('span', null, state.user.username),
-        el('button', { class: 'logout', onclick: logout }, 'خروج')
-      )
+      el('div', { class: 'me' }, el('span', { class: 'dot' }), el('span', null, state.user.username))
     ),
     el('main', { class: 'content', id: 'content' }),
     el('nav', { class: 'bottom-nav' },
-      el('button', {
-        class: 'nav-btn' + (state.view === 'main' ? ' active' : ''),
-        onclick: () => switchView('main'),
-      }, 'القائمة الرئيسية'),
-      el('button', {
-        class: 'nav-btn' + (state.view === 'add' ? ' active' : ''),
-        onclick: () => switchView('add'),
-      }, 'إضافة إلى القائمة')
+      el('button', { class: 'nav-btn' + (state.view === 'main' ? ' active' : ''), onclick: () => switchView('main') }, 'الرئيسية'),
+      el('button', { class: 'nav-btn' + (state.view === 'add' ? ' active' : ''), onclick: () => switchView('add') }, 'إضافة'),
+      el('button', { class: 'nav-btn' + (state.view === 'requests' ? ' active' : ''), onclick: () => switchView('requests') }, 'الطلبات'),
+      el('button', { class: 'nav-btn' + (state.view === 'settings' ? ' active' : ''), onclick: () => switchView('settings') }, 'الإعدادات')
     )
   );
   app.appendChild(shell);
+
   if (state.view === 'main') renderMain();
   else if (state.view === 'add') renderAdd();
+  else if (state.view === 'requests') renderRequests();
+  else if (state.view === 'settings') renderSettings();
+  else if (state.view === 'admin') renderAdmin();
   else if (state.view === 'chat') renderChat();
 }
 
-function switchView(v) {
-  state.view = v;
-  render();
-}
-
-/* ---------- Main list ---------- */
-const currentFilter = { main: '' };
+function switchView(v) { state.view = v; render(); }
 
 function renderMain() {
-  const c = $('#content');
-  c.innerHTML = '';
-  c.appendChild(el('div', { class: 'search-bar' },
-    el('input', {
-      type: 'search',
-      class: 'search-input',
-      placeholder: 'بحث',
-      autocomplete: 'off',
-      oninput: (e) => { currentFilter.main = e.target.value; renderMainList(currentFilter.main); },
-    })
-  ));
+  const c = $('#content'); c.innerHTML = '';
+  c.appendChild(el('div', { class: 'search-bar' }, el('input', { type: 'search', class: 'search-input', placeholder: 'بحث', oninput: (e) => renderMainList(e.target.value) })));
   c.appendChild(el('div', { class: 'list', id: 'main-list' }));
-  renderMainList(currentFilter.main);
+  renderMainList();
 }
 
-function avatarEl(url, name, online) {
-  const w = el('div', { class: 'avatar' + (online ? ' online' : '') });
-  if (url) w.appendChild(el('img', { src: url, alt: name }));
-  else w.appendChild(el('span', null, (name || '?').charAt(0).toUpperCase()));
-  return w;
-}
-
-function renderMainList(filter) {
-  const list = $('#main-list');
-  if (!list) return;
-  list.innerHTML = '';
+function renderMainList(filter = '') {
+  const list = $('#main-list'); if (!list) return; list.innerHTML = '';
   const f = (filter || '').trim().toLowerCase();
 
-  // Incoming friend requests
-  const reqs = state.requests.filter(r =>
-    !f || r.username.toLowerCase().includes(f) || r.displayName.toLowerCase().includes(f)
-  );
-  if (reqs.length) {
-    const sec = el('div', { class: 'section' }, el('h3', { class: 'section-title' }, 'طلبات الصداقة'));
-    for (const r of reqs) {
-      sec.appendChild(el('div', { class: 'item' },
-        avatarEl(r.avatarUrl, r.displayName),
-        el('div', { class: 'item-body' },
-          el('div', { class: 'item-name' }, r.displayName),
-          el('div', { class: 'item-sub' }, '@' + r.username)
-        ),
-        el('div', { class: 'actions' },
-          el('button', { class: 'btn small primary', onclick: () => respond(r.id, 'accept') }, 'قبول'),
-          el('button', { class: 'btn small', onclick: () => respond(r.id, 'reject') }, 'رفض')
-        )
-      ));
-    }
-    list.appendChild(sec);
-  }
-
-  // Friends
-  const friends = state.friends.filter(fr =>
-    !f || fr.username.toLowerCase().includes(f) || fr.displayName.toLowerCase().includes(f)
-  );
+  const friends = state.friends.filter(fr => fr.displayName.toLowerCase().includes(f) || fr.username.toLowerCase().includes(f));
   const fs = el('div', { class: 'section' }, el('h3', { class: 'section-title' }, 'الأصدقاء'));
-  if (!friends.length) fs.appendChild(el('div', { class: 'empty' }, 'لا أصدقاء بعد'));
-  else for (const fr of friends) {
-    const online = !!state.presence[fr.id];
-    fs.appendChild(el('div', {
-      class: 'item',
-      onclick: () => openChat('user', fr.id, fr.displayName),
-    },
-      avatarEl(fr.avatarUrl, fr.displayName, online),
-      el('div', { class: 'item-body' },
-        el('div', { class: 'item-name' }, fr.displayName),
-        el('div', { class: 'item-sub' }, online ? 'متوفر الآن' : 'غير متوفر')
-      )
+  for (const fr of friends) {
+    fs.appendChild(el('div', { class: 'item', onclick: () => openChat('user', fr.id, fr.displayName) },
+      el('div', { class: 'avatar' + (state.presence[fr.id] ? ' online' : '') }, fr.displayName.charAt(0).toUpperCase()),
+      el('div', { class: 'item-body' }, el('div', { class: 'item-name' }, fr.displayName), el('div', { class: 'item-sub' }, state.presence[fr.id] ? 'متوفر الآن' : 'غير متوفر'))
     ));
   }
   list.appendChild(fs);
 
-  // Public channels
-  const chans = state.channels.filter(ch => !f || ch.name.toLowerCase().includes(f));
   const cs = el('div', { class: 'section' }, el('h3', { class: 'section-title' }, 'القنوات العامة'));
-  for (const ch of chans) {
-    cs.appendChild(el('div', {
-      class: 'item',
-      onclick: () => openChat('channel', ch.id, '#' + ch.name),
-    },
+  for (const ch of state.channels) {
+    cs.appendChild(el('div', { class: 'item', onclick: () => openChat('channel', ch.id, '#' + ch.name) },
       el('div', { class: 'channel-icon' }, '#'),
-      el('div', { class: 'item-body' },
-        el('div', { class: 'item-name' }, ch.name),
-        el('div', { class: 'item-sub' }, ch.description || 'قناة عامة')
-      )
+      el('div', { class: 'item-body' }, el('div', { class: 'item-name' }, ch.name))
     ));
   }
   list.appendChild(cs);
 }
 
-async function respond(requestId, action) {
-  try {
-    await api('POST', '/friends/respond', { requestId, action });
-    await loadRequests();
-    await loadFriends();
-    renderMainList(currentFilter.main);
-  } catch (e) { alert(e.message); }
-}
-
-/* ---------- Add view ---------- */
-function renderAdd() {
-  const c = $('#content');
-  c.innerHTML = '';
-  c.appendChild(el('div', { class: 'search-bar' },
-    el('input', {
-      type: 'search',
-      class: 'search-input',
-      placeholder: 'بحث',
-      autocomplete: 'off',
-      oninput: debounce(onAddSearch, 280),
-    })
-  ));
-  c.appendChild(el('div', { class: 'list', id: 'add-results' },
-    el('div', { class: 'empty' }, 'اكتب يوزرنيم صديقك للبحث')
-  ));
-}
-
-const onAddSearch = async (e) => {
-  const q = e.target.value.trim();
-  const host = $('#add-results');
-  host.innerHTML = '';
-  if (q.length < 2) return;
-  try {
-    const r = await api('GET', '/users/search?q=' + encodeURIComponent(q));
-    if (!r.results.length) { host.appendChild(el('div', { class: 'empty' }, 'لا نتائج')); return; }
-    for (const u of r.results) host.appendChild(profileCard(u));
-  } catch (err) {
-    host.appendChild(el('div', { class: 'empty' }, err.message));
+function renderRequests() {
+  const c = $('#content'); c.innerHTML = '';
+  c.appendChild(el('h3', { class: 'section-title' }, 'طلبات الصداقة'));
+  const list = el('div', { class: 'list' });
+  if (!state.requests.length) list.appendChild(el('div', { class: 'empty' }, 'لا توجد طلبات جديدة'));
+  for (const r of state.requests) {
+    list.appendChild(el('div', { class: 'item' },
+      el('div', { class: 'avatar' }, r.display_name.charAt(0).toUpperCase()),
+      el('div', { class: 'item-body' }, el('div', { class: 'item-name' }, r.display_name), el('div', { class: 'item-sub' }, '@' + r.username)),
+      el('div', { class: 'actions' },
+        el('button', { class: 'btn small primary', onclick: () => respondRequest(r.id, 'accept') }, 'قبول'),
+        el('button', { class: 'btn small danger', onclick: () => respondRequest(r.id, 'reject') }, 'رفض')
+      )
+    ));
   }
-};
-
-function profileCard(u) {
-  const rel = u.relationship;
-  const actions = [];
-  if (!rel) {
-    actions.push(el('button', { class: 'btn primary', onclick: () => sendRequest(u.id) }, 'إضافة'));
-  } else if (rel.status === 'pending' && rel.incoming) {
-    actions.push(
-      el('button', { class: 'btn primary', onclick: () => respond(rel.requestId, 'accept') }, 'قبول'),
-      el('button', { class: 'btn danger',  onclick: () => respond(rel.requestId, 'reject') }, 'رفض')
-    );
-  } else if (rel.status === 'pending') {
-    actions.push(el('button', { class: 'btn', disabled: true }, 'طلب معلق'));
-  } else if (rel.status === 'accepted') {
-    actions.push(el('button', { class: 'btn', disabled: true }, 'صديق'));
-  } else {
-    actions.push(el('button', { class: 'btn primary', onclick: () => sendRequest(u.id) }, 'إضافة'));
-  }
-  return el('div', { class: 'profile-card' },
-    avatarEl(u.avatarUrl, u.displayName),
-    el('div', { class: 'profile-info' },
-      el('div', { class: 'profile-name' }, u.displayName),
-      el('div', { class: 'profile-user' }, '@' + u.username)
-    ),
-    el('div', { class: 'profile-actions' }, ...actions)
-  );
+  c.appendChild(list);
 }
 
-async function sendRequest(userId) {
-  try {
-    await api('POST', '/friends/request', { userId });
-    const host = $('#add-results');
-    const q = host.previousElementSibling?.querySelector('input')?.value?.trim() || '';
-    if (q.length >= 2) onAddSearch({ target: { value: q } });
-  } catch (e) { alert(e.message); }
-}
-
-/* ---------- Chat ---------- */
-async function openChat(type, id, name) {
-  state.chat = { type, id, name };
-  state.view = 'chat';
+async function respondRequest(id, action) {
+  await api('POST', '/friends/respond', { requestId: id, action });
+  await Promise.all([loadRequests(), loadFriends()]);
   render();
-  if (type === 'channel') state.socket?.emit('channel:join-room', id);
-  const path = type === 'user' ? `/messages/dm/${id}` : `/messages/channel/${id}`;
-  try {
-    const r = await api('GET', path);
-    const box = $('#messages');
-    box.innerHTML = '';
-    for (const m of r.messages) appendMessage(m);
-  } catch (e) {
-    const box = $('#messages');
-    if (box) box.textContent = e.message;
+}
+
+function renderAdd() {
+  const c = $('#content'); c.innerHTML = '';
+  c.appendChild(el('div', { class: 'search-bar' }, el('input', { type: 'search', class: 'search-input', placeholder: 'بحث', oninput: debounce(async (e) => {
+    const q = e.target.value.trim(); const host = $('#add-results'); host.innerHTML = '';
+    if (q.length < 2) return;
+    const r = await api('GET', '/users/search?q=' + encodeURIComponent(q));
+    for (const u of r.results) {
+      const btn = u.relationship?.status === 'pending' ? el('button', { class: 'btn small', disabled: true }, 'معلق') : el('button', { class: 'btn small primary', onclick: () => api('POST', '/friends/request', { userId: u.id }).then(() => alert('تم الإرسال')) }, 'إضافة');
+      host.appendChild(el('div', { class: 'profile-card' }, el('div', { class: 'profile-name' }, u.displayName), el('div', { class: 'profile-user' }, '@' + u.username), btn));
+    }
+  }, 300) })));
+  c.appendChild(el('div', { class: 'list', id: 'add-results', html: '<div class="empty">اكتب يوزرنيم صديقك</div>' }));
+}
+
+function renderSettings() {
+  const c = $('#content'); c.innerHTML = '';
+  
+  // Profile Box
+  const profileBox = el('div', { class: 'profile-card' },
+    el('div', { class: 'profile-name' }, state.user.displayName),
+    el('div', { class: 'profile-user' }, '@' + state.user.username),
+    el('button', { class: 'btn small', onclick: () => renderEditProfile() }, 'تعديل')
+  );
+  c.appendChild(el('div', { class: 'section' }, el('h3', { class: 'section-title' }, 'ملفي الشخصي'), profileBox));
+
+  // Options
+  c.appendChild(el('div', { class: 'section' },
+    el('h3', { class: 'section-title' }, 'الدعم'),
+    el('div', { class: 'item', onclick: () => alert('سياسة الخصوصية: نحن نحترم خصوصيتك ولا نشارك بياناتك.') }, 'سياسة الخصوصية'),
+    el('div', { class: 'item', onclick: () => promptReport() }, 'الدعم الفني والبلاغات')
+  ));
+
+  // Admin
+  if (state.user.role === 'admin') {
+    c.appendChild(el('div', { class: 'section' },
+      el('h3', { class: 'section-title' }, 'الإدارة'),
+      el('div', { class: 'item', onclick: () => switchView('admin') }, 'لوحة التحكم (صانع التطبيق)')
+    ));
+  } else {
+    c.appendChild(el('div', { class: 'section' },
+      el('h3', { class: 'section-title' }, 'دخول الإدارة'),
+      el('div', { class: 'item' }, el('input', { type: 'password', class: 'search-input', placeholder: 'كلمة مرور الإدارة', onchange: async (e) => {
+        if (!e.target.value) return;
+        try {
+          const r = await api('POST', '/admin/login', { password: e.target.value });
+          state.token = r.token; localStorage.setItem('pc.token', r.token); state.user.role = 'admin';
+          alert('تم تفعيل وضع الإدارة'); render();
+        } catch { alert('كلمة المرور خاطئة'); }
+      } }))
+    ));
   }
+
+  // Logout
+  c.appendChild(el('div', { class: 'section' },
+    el('div', { class: 'item', style: 'color:#e5484d', onclick: () => { localStorage.clear(); location.reload(); } }, 'تسجيل الخروج')
+  ));
+}
+
+function renderEditProfile() {
+  const c = $('#content'); c.innerHTML = '';
+  c.appendChild(el('div', { class: 'section' }, el('h3', { class: 'section-title' }, 'تعديل الملف الشخصي')));
+  const form = el('form', { class: 'profile-card', onsubmit: async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      const r = await api('POST', '/user/update', data);
+      state.token = r.token; localStorage.setItem('pc.token', r.token); state.user = r.user;
+      alert('تم الحفظ بنجاح'); switchView('settings');
+    } catch (err) { alert(err.message); }
+  }},
+    el('div', { class: 'field' }, el('label', null, 'الاسم الجديد'), el('input', { name: 'displayName', value: state.user.displayName, required: true })),
+    el('div', { class: 'field' }, el('label', null, 'اليوزرنيم الجديد'), el('input', { name: 'username', value: state.user.username, required: true })),
+    el('div', { class: 'profile-actions' },
+      el('button', { type: 'submit', class: 'btn primary' }, 'حفظ'),
+      el('button', { type: 'button', class: 'btn', onclick: () => switchView('settings') }, 'إلغاء')
+    )
+  );
+  c.appendChild(form);
+}
+
+function promptReport() {
+  const subject = prompt('موضوع البلاغ / الاستفسار:');
+  if (!subject) return;
+  const message = prompt('تفاصيل الرسالة:');
+  if (!message) return;
+  api('POST', '/reports', { subject, message }).then(() => alert('تم الإرسال بنجاح'));
+}
+
+async function renderAdmin() {
+  const c = $('#content'); c.innerHTML = '';
+  c.appendChild(el('h3', { class: 'section-title' }, 'لوحة تحكم الإدارة'));
+  try {
+    const r = await api('GET', '/admin/dashboard');
+    c.appendChild(el('div', { class: 'section' }, el('h4', null, 'المستخدمين'), el('div', { class: 'list' }, r.users.map(u => el('div', { class: 'item' }, u.display_name, ' @' + u.username)))));
+    c.appendChild(el('div', { class: 'section' }, el('h4', null, 'البلاغات'), el('div', { class: 'list' }, r.reports.map(rep => el('div', { class: 'item' }, rep.subject, ' - ', rep.message)))));
+  } catch (err) {
+    c.appendChild(el('div', { class: 'empty' }, 'غير مصرح لك'));
+  }
+}
+
+async function openChat(type, id, name) {
+  state.chat = { type, id, name }; state.view = 'chat'; render();
+  const path = type === 'user' ? `/messages/dm/${id}` : `/messages/channel/${id}`;
+  const r = await api('GET', path); $('#messages').innerHTML = ''; for (const m of r.messages) appendMessage(m);
 }
 
 function renderChat() {
-  const c = $('#content');
-  c.innerHTML = '';
-  c.appendChild(el('div', { class: 'chat-header' },
-    el('button', { class: 'back', onclick: () => { state.view = 'main'; render(); } }, '→'),
-    el('div', { class: 'chat-title' }, state.chat.name)
-  ));
+  const c = $('#content'); c.innerHTML = '';
+  c.appendChild(el('div', { class: 'chat-header' }, el('button', { class: 'back', onclick: () => switchView('main') }, '→'), el('div', { class: 'chat-title' }, state.chat.name)));
   c.appendChild(el('div', { class: 'messages', id: 'messages' }));
-  c.appendChild(el('form', {
-    class: 'composer',
-    onsubmit: async (e) => {
-      e.preventDefault();
-      const inp = e.target.querySelector('input');
-      const content = inp.value.trim();
-      if (!content) return;
-      inp.value = '';
-      const path = state.chat.type === 'user'
-        ? `/messages/dm/${state.chat.id}`
-        : `/messages/channel/${state.chat.id}`;
-      try { await api('POST', path, { content }); }
-      catch (err) { alert(err.message); }
-    },
-  },
-    el('input', { type: 'text', placeholder: 'اكتب رسالة…', autocomplete: 'off' }),
-    el('button', { type: 'submit', class: 'send' }, 'إرسال')
-  ));
+  c.appendChild(el('form', { class: 'composer', onsubmit: async (e) => {
+    e.preventDefault(); const inp = e.target.querySelector('input'); const content = inp.value.trim(); if (!content) return; inp.value = '';
+    const path = state.chat.type === 'user' ? `/messages/dm/${state.chat.id}` : `/messages/channel/${state.chat.id}`;
+    await api('POST', path, { content });
+  }}, el('input', { type: 'text', placeholder: 'اكتب رسالة…', autocomplete: 'off' }), el('button', { type: 'submit', class: 'send' }, 'إرسال')));
 }
 
 function appendMessage(m) {
-  const box = $('#messages');
-  if (!box) return;
-  const mine = m.sender_id === state.user.id;
-  box.appendChild(el('div', { class: 'msg' + (mine ? ' mine' : '') },
-    el('div', { class: 'msg-meta' }, m.display_name),
-    el('div', { class: 'msg-body' }, m.content)
-  ));
+  const box = $('#messages'); if (!box) return;
+  box.appendChild(el('div', { class: 'msg' + (m.sender_id === state.user.id ? ' mine' : '') }, el('div', { class: 'msg-meta' }, m.display_name), el('div', { class: 'msg-body' }, m.content)));
   box.scrollTop = box.scrollHeight;
 }
 
-/* ---------- Misc ---------- */
-function debounce(fn, ms) {
-  let t;
-  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
-}
-
-function logout() {
-  state.socket?.disconnect();
-  state.token = null;
-  state.user = null;
-  localStorage.removeItem('pc.token');
-  renderAuth();
-       }
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
