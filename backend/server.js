@@ -260,8 +260,10 @@ app.post('/api/admin/login', authRequired, (req, res) => {
   } else res.status(401).json({ error: 'wrong_password' });
 });
 
+// --- التعديل هنا: بنجيب الصلاحية من الداتابيز مش من التوكن ---
 app.get('/api/admin/dashboard', authRequired, (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
+  const dbUser = db.prepare(`SELECT role FROM users WHERE id = ?`).get(req.user.uid);
+  if (!dbUser || dbUser.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
   res.json({ users: S.listAllUsers.all(), reports: S.listAllReports.all() });
 });
 
