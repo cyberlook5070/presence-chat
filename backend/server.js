@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS reports (
 
 try { db.exec(`ALTER TABLE users ADD COLUMN email TEXT`); } catch(e) {}
 try { db.exec(`ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 1`); } catch(e) {}
+try { db.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`); } catch(e) {}
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.ethereal.email',
@@ -260,11 +261,17 @@ app.post('/api/admin/login', authRequired, (req, res) => {
   } else res.status(401).json({ error: 'wrong_password' });
 });
 
-// --- التعديل هنا: بنجيب الصلاحية من الداتابيز مش من التوكن ---
+// التعديل هنا: بنجيب الصلاحية من الداتابيز مباشرة
 app.get('/api/admin/dashboard', authRequired, (req, res) => {
   const dbUser = db.prepare(`SELECT role FROM users WHERE id = ?`).get(req.user.uid);
   if (!dbUser || dbUser.role !== 'admin') return res.status(403).json({ error: 'forbidden' });
-  res.json({ users: S.listAllUsers.all(), reports: S.listAllReports.all() });
+  
+  try {
+    res.json({ users: S.listAllUsers.all(), reports: S.listAllReports.all() });
+  } catch (e) {
+    console.error("Dashboard Error:", e);
+    res.status(500).json({ error: 'db_error' });
+  }
 });
 
 app.post('/api/reports', authRequired, (req, res) => { S.insertReport.run(req.user.uid, req.body.subject, req.body.message); res.json({ ok: true }); });
