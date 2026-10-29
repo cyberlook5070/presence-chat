@@ -100,42 +100,66 @@ function renderAuth() {
   const card = el('div', { class: 'auth-card' },
     el('h1', null, 'Presence Chat'),
     el('div', { class: 'tabs' },
-      el('button', { class: 'tab active', onclick: onTab, 'data-tab': 'login' }, 'دخول'),
-      el('button', { class: 'tab', onclick: onTab, 'data-tab': 'register' }, 'تسجيل')
+      el('button', { class: 'tab' + (state.authMode === 'login' ? ' active' : ''), onclick: () => { state.authMode = 'login'; renderAuth(); } }, 'دخول'),
+      el('button', { class: 'tab' + (state.authMode === 'register' ? ' active' : ''), onclick: () => { state.authMode = 'register'; renderAuth(); } }, 'تسجيل')
     ),
     el('form', { class: 'auth-form', onsubmit: onAuthSubmit },
-      el('div', { class: 'field', id: 'f-name', style: 'display:none' },
+      state.authMode === 'register' && el('div', { class: 'field' },
         el('label', null, 'الاسم الظاهر'),
-        el('input', { name: 'displayName', type: 'text' })
+        el('input', { name: 'displayName', type: 'text', required: true })
       ),
-      el('div', { class: 'field' }, el('label', null, 'اسم المستخدم'), el('input', { name: 'username', type: 'text', required: true })),
-      el('div', { class: 'field' }, el('label', null, 'كلمة المرور'), el('input', { name: 'password', type: 'password', required: true })),
-      el('button', { type: 'submit', class: 'btn primary', style: 'width:100%' }, 'دخول')
-    ),
-    el('div', { class: 'err', id: 'auth-err' })
+      state.authMode === 'register' && el('div', { class: 'field' },
+        el('label', null, 'البريد الإلكتروني'),
+        el('input', { name: 'email', type: 'email', required: true })
+      ),
+      el('div', { class: 'field' },
+        el('label', null, 'اسم المستخدم'),
+        el('input', { name: 'username', type: 'text', required: true })
+      ),
+      el('div', { class: 'field' },
+        el('label', null, 'كلمة المرور'),
+        el('input', { name: 'password', type: 'password', required: true })
+      ),
+      state.authMode === 'register' && el('div', { class: 'field', id: 'otp-field', style: 'display:none' },
+        el('label', null, 'كود التحقق (OTP)'),
+        el('input', { name: 'code', placeholder: 'أدخل الكود المرسل لإيميلك' })
+      ),
+      el('button', { type: 'submit', class: 'btn primary', style: 'width:100%' },
+        state.authMode === 'login' ? 'دخول' : 'تسجيل'
+      ),
+      el('div', { class: 'err', id: 'auth-err' })
+    )
   );
   app.appendChild(card);
 }
 
-function onTab(e) {
-  state.authMode = e.target.dataset.tab;
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === state.authMode));
-  $('#f-name').style.display = state.authMode === 'register' ? 'block' : 'none';
-  document.querySelector('.auth-form button[type="submit"]').textContent = state.authMode === 'register' ? 'تسجيل' : 'دخول';
-}
-
 async function onAuthSubmit(e) {
   e.preventDefault();
-  const fd = new FormData(e.target);
-  const body = Object.fromEntries(fd.entries());
+  const fd = new FormData(e.target); const body = Object.fromEntries(fd.entries());
+  const errDiv = $('#auth-err');
+  errDiv.style.color = '#e5484d';
+
   try {
-    const path = state.authMode === 'login' ? '/login' : '/register';
-    const r = await api('POST', path, body);
-    state.token = r.token; localStorage.setItem('pc.token', r.token); state.user = r.user;
-    await connectSocket();
-    await Promise.all([loadFriends(), loadChannels(), loadRequests()]);
-    render();
-  } catch (err) { $('#auth-err').textContent = err.message; }
+    if (state.authMode === 'login') {
+      const r = await api('POST', '/login', body);
+      state.token = r.token; localStorage.setItem('pc.token', r.token); state.user = r.user;
+      window.location.reload();
+    } else {
+      if (!body.code) {
+        await api('POST', '/auth/send-otp', body);
+        $('#otp-field').style.display = 'block';
+        errDiv.textContent = 'تم إرسال الكود! تفقده في إيميلك (أو في Logs السيرفر).';
+        errDiv.style.color = '#22c55e';
+        Array.from(e.target.querySelectorAll('input:not([name="code"])')).forEach(inp => inp.readOnly = true);
+      } else {
+        const r = await api('POST', '/auth/verify-otp', body);
+        state.token = r.token; localStorage.setItem('pc.token', r.token);
+        window.location.reload();
+      }
+    }
+  } catch (err) {
+    errDiv.textContent = err.message;
+  }
 }
 
 function render() {
@@ -227,7 +251,7 @@ function renderAdd() {
     if (q.length < 2) return;
     const r = await api('GET', '/users/search?q=' + encodeURIComponent(q));
     for (const u of r.results) {
-      const btn = u.relationship?.status === 'pending' ? el('button', { class: 'btn small', disabled: true }, 'معلق') : el('button', { class: 'btn small primary', onclick: () => api('POST', '/friends/request', { userId: u.id }).then(() => alert('تم الإرسال')) }, 'إضافة');
+      const btn = u.relationship?.status === 'pending' ? el('button', { class: 'btn small', disabled: true }, 'معلق') : el('button', { class: 'btn small primary', onclick: () => api('POST', '/friends/request', { userId: u.id }).then(() => showModal('تم', el('p', null, 'تم الإرسال'))) }, 'إضافة');
       host.appendChild(el('div', { class: 'profile-card' }, el('div', { class: 'profile-name' }, u.displayName), el('div', { class: 'profile-user' }, '@' + u.username), btn));
     }
   }, 300) })));
@@ -237,7 +261,6 @@ function renderAdd() {
 function renderSettings() {
   const c = $('#content'); c.innerHTML = '';
   
-  // Profile Box
   const profileBox = el('div', { class: 'profile-card' },
     el('div', { class: 'profile-name' }, state.user.displayName),
     el('div', { class: 'profile-user' }, '@' + state.user.username),
@@ -245,14 +268,12 @@ function renderSettings() {
   );
   c.appendChild(el('div', { class: 'section' }, el('h3', { class: 'section-title' }, 'ملفي الشخصي'), profileBox));
 
-  // Options
   c.appendChild(el('div', { class: 'section' },
     el('h3', { class: 'section-title' }, 'الدعم'),
-    el('div', { class: 'item', onclick: () => showModal('سياسة الخصوصية', el('p', null, 'نحن نحترم خصوصيتك تماماً. جميع بياناتك محمية ومشفرة، ولا نشاركها مع أي طرف ثالث تحت أي ظرف. أنت المتحكم الوحيد في بياناتك.')) }, 'سياسة الخصوصية'),
+    el('div', { class: 'item', onclick: () => showModal('سياسة الخصوصية', el('p', null, 'نحن نحترم خصوصيتك تماماً. جميع بياناتك محمية ومشفرة، ولا نشاركها مع أي طرف ثالث تحت أي ظرف.')) }, 'سياسة الخصوصية'),
     el('div', { class: 'item', onclick: () => promptReport() }, 'الدعم الفني والبلاغات')
   ));
 
-  // Admin
   if (state.user.role === 'admin') {
     c.appendChild(el('div', { class: 'section' },
       el('h3', { class: 'section-title' }, 'الإدارة'),
@@ -273,7 +294,6 @@ function renderSettings() {
     ));
   }
 
-  // Logout
   c.appendChild(el('div', { class: 'section' },
     el('div', { class: 'item', style: 'color:#e5484d', onclick: () => { localStorage.clear(); location.reload(); } }, 'تسجيل الخروج')
   ));
