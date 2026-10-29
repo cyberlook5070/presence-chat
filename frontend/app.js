@@ -2,11 +2,9 @@
 
 const state = {
   token: localStorage.getItem('pc.token') || null,
-  user: null,
-  socket: null,
-  view: 'main',           // 'main' | 'add' | 'requests' | 'settings' | 'admin' | 'chat'
-  chat: null,
-  friends: [], channels: [], presence: Object.create(null), requests: [], reports: [], users: [],
+  user: null, socket: null,
+  view: 'main', chat: null,
+  friends: [], channels: [], presence: Object.create(null), requests: [],
   authMode: 'login',
 };
 
@@ -25,6 +23,20 @@ function el(tag, attrs, ...children) {
     n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
   }
   return n;
+}
+
+/* ---------- Custom Modal (Glassmorphism) ---------- */
+function showModal(title, contentNode) {
+  const overlay = el('div', { class: 'modal-overlay', onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+  const modal = el('div', { class: 'glass-modal' },
+    el('div', { class: 'modal-header' },
+      el('h3', null, title),
+      el('button', { class: 'modal-close', onclick: () => overlay.remove() }, '✕')
+    ),
+    el('div', { class: 'modal-body' }, contentNode)
+  );
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
 }
 
 async function api(method, path, body) {
@@ -236,7 +248,7 @@ function renderSettings() {
   // Options
   c.appendChild(el('div', { class: 'section' },
     el('h3', { class: 'section-title' }, 'الدعم'),
-    el('div', { class: 'item', onclick: () => alert('سياسة الخصوصية: نحن نحترم خصوصيتك ولا نشارك بياناتك.') }, 'سياسة الخصوصية'),
+    el('div', { class: 'item', onclick: () => showModal('سياسة الخصوصية', el('p', null, 'نحن نحترم خصوصيتك تماماً. جميع بياناتك محمية ومشفرة، ولا نشاركها مع أي طرف ثالث تحت أي ظرف. أنت المتحكم الوحيد في بياناتك.')) }, 'سياسة الخصوصية'),
     el('div', { class: 'item', onclick: () => promptReport() }, 'الدعم الفني والبلاغات')
   ));
 
@@ -254,8 +266,9 @@ function renderSettings() {
         try {
           const r = await api('POST', '/admin/login', { password: e.target.value });
           state.token = r.token; localStorage.setItem('pc.token', r.token); state.user.role = 'admin';
-          alert('تم تفعيل وضع الإدارة'); render();
-        } catch { alert('كلمة المرور خاطئة'); }
+          showModal('تم التفعيل', el('p', null, 'تم تفعيل وضع الإدارة بنجاح.'));
+          render();
+        } catch { showModal('خطأ', el('p', null, 'كلمة المرور خاطئة.')); }
       } }))
     ));
   }
@@ -275,8 +288,8 @@ function renderEditProfile() {
     try {
       const r = await api('POST', '/user/update', data);
       state.token = r.token; localStorage.setItem('pc.token', r.token); state.user = r.user;
-      alert('تم الحفظ بنجاح'); switchView('settings');
-    } catch (err) { alert(err.message); }
+      showModal('تم الحفظ', el('p', null, 'تم تحديث بياناتك بنجاح.')); switchView('settings');
+    } catch (err) { showModal('خطأ', el('p', null, err.message)); }
   }},
     el('div', { class: 'field' }, el('label', null, 'الاسم الجديد'), el('input', { name: 'displayName', value: state.user.displayName, required: true })),
     el('div', { class: 'field' }, el('label', null, 'اليوزرنيم الجديد'), el('input', { name: 'username', value: state.user.username, required: true })),
@@ -289,11 +302,20 @@ function renderEditProfile() {
 }
 
 function promptReport() {
-  const subject = prompt('موضوع البلاغ / الاستفسار:');
-  if (!subject) return;
-  const message = prompt('تفاصيل الرسالة:');
-  if (!message) return;
-  api('POST', '/reports', { subject, message }).then(() => alert('تم الإرسال بنجاح'));
+  const form = el('form', { class: 'field', onsubmit: async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      await api('POST', '/reports', data);
+      document.querySelector('.modal-overlay').remove();
+      showModal('تم الإرسال', el('p', null, 'تم استلام بلاغك وسيتم مراجعته من قبل الإدارة.'));
+    } catch (err) { showModal('خطأ', el('p', null, err.message)); }
+  }},
+    el('div', { class: 'field' }, el('label', null, 'موضوع البلاغ'), el('input', { name: 'subject', required: true })),
+    el('div', { class: 'field' }, el('label', null, 'التفاصيل'), el('textarea', { name: 'message', required: true, rows: 4 })),
+    el('button', { type: 'submit', class: 'btn primary', style: 'width:100%; margin-top:8px;' }, 'إرسال البلاغ')
+  );
+  showModal('الدعم الفني', form);
 }
 
 async function renderAdmin() {
