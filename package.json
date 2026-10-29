@@ -1,0 +1,19 @@
+{
+  "name": "presence-chat",
+  "version": "1.0.0",
+  "private": true,
+  "main": "backend/server.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "node --watch backend/server.js"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "socket.io": "^4.7.5"
+  }
+}
