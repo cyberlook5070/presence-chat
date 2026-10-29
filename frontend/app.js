@@ -83,11 +83,6 @@ function connectSocket() {
     state.socket.on('message:channel', ({ message }) => {
       if (state.view === 'chat') appendMessage(message);
     });
-    state.socket.on('user:updated', ({ userId, displayName, username }) => {
-      const f = state.friends.find(x => x.id === userId);
-      if (f) { f.displayName = displayName; f.username = username; }
-      render();
-    });
   });
 }
 
